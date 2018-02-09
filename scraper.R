@@ -115,7 +115,8 @@ getRes <- function(url) {
   }
   return(res)
 }
-# TODO: Use regex to parse these resolutions, get them ideally in numerical format
+
+# Parses Resolution Text to numeric
 res <- sapply(cand_structs$PageLink, getRes)
 res_parsed <- sub("Resolution:", "", res)
 res_parsed <- gsub("&nbsp", "", res_parsed)
@@ -123,4 +124,5 @@ res_parsed <- gsub("Å", "", res_parsed)
 res_parsed <- as.numeric(res_parsed)
 cand_structs$Resolution <- res_parsed
 
+write_csv(cand_structs, "./data/candStructs.csv")
 
