@@ -1,6 +1,7 @@
 library(XML)
 library(readr)
 library(httr)
+library(dplyr)
 
 # Opens pre-saved version of the search results
 searchResults <- read_file("data/searchResults.html")
@@ -40,8 +41,10 @@ cand_structs$PaperDate  <- sapply(cit_nodes, xmlValue)
 link_path <- "//ul[@id='SearchResultsDetails-MainContent']/li/div[2]/h3/a"
 cand_structs$PageLink <- xpathSApply(doc=d, path=link_path, fun=xmlGetAttr, name="href")
 
+# This function returns FASTA link associated with a particular rcsb page
 getFASTALink <- function(url) {
   # Gets HTML associated with particular site
+  print(url)
   s <- GET(url)
   w <- content(s, as='text') # converts s to plaintext of HTML
   d <- htmlParse(file=content(s, as="text", asText=T))
@@ -49,11 +52,22 @@ getFASTALink <- function(url) {
   #XPath associated with FASTA download from page
   fl_path <- '//*[@id="DownloadFilesButton"]/ul/li[1]/a'
   fasta_link <- xpathSApply(doc=d, path=fl_path, fun=xmlGetAttr, name="href")[1]
+  if (nchar(fasta_link) == 0) {
+    # Tries again (one more time), if necessary
+    fasta_link <- xpathSApply(doc=d, path=fl_path, fun=xmlGetAttr, name="href")[1]
+  }
   fasta_link <- paste("http://www.rcsb.org", fasta_link, sep="")
   return(fasta_link)
 }
 
-getFASTALink("http://www.rcsb.org/structure/6B4V")
+# Uses the above function to get the FASTA links for all candidate structures
+cand_structs$FastaLink <- sapply(cand_structs$PageLink, getFASTALink)
+
+
+
+
+
+
 
 
 
