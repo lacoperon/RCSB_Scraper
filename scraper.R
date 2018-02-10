@@ -126,3 +126,43 @@ cand_structs$Resolution <- res_parsed
 
 write_csv(cand_structs, "./data/candStructs.csv")
 
+# Path associated with 
+DNA_path <- '//*[@id="MacromoleculeTableDNA"]/div/table/tbody/tr[3]'
+# Function to get the constituent Macromolecules in the structure
+# (In this case, I'll only use it for the RNA Parts, but it can also
+# be applied to Protein as well)
+getConstituentEntities <- function(url, path) {
+  print(url)
+  s <- GET(url)
+  w <- content(s, as='text') # converts s to plaintext of HTML
+  d <- htmlParse(file=content(s, as="text", asText=T))
+  nodes <- getNodeSet(doc=d, path=path)
+  nodeChildren <- sapply(nodes, xmlChildren)
+  data_list <- sapply(nodeChildren, xmlValue)
+  if (length(data_list) == 0) {
+    return(NULL)
+  }
+  EntityName <- data_list[seq(1, length(data_list), 4)]
+  entities <- data.frame(EntityName)
+  entities$ChainNames <- data_list[seq(2, length(data_list), 4)]
+  entities$Length <- data_list[seq(3, length(data_list), 4)]
+  entities$Organism <- data_list[seq(4, length(data_list), 4)]
+  return(entities)
+}
+
+# Path for DNA details
+getRNA <- partial(getConstituentEntities, path=DNA_path)
+cand_structs$NucleotideEntities <- sapply(cand_structs$PageLink, getRNA)
+
+# Some of the above don't actually contain Nucleotides with protein
+# (And, based on a cursory look at the dataset, don't contain Ribosome structs)
+cand_structs$hasNoEntities <- sapply(cand_structs$NucleotideEntities, is.null)
+cand_structs2 <- cand_structs2 %>% 
+  filter(hasNucleotideEntities != TRUE) %>% 
+  select(-hasNucleotideEntities)
+
+# Maybe we want to look at the structures that don't contain nucleotideEntities
+cand_structsFail <- cand_structs %>%
+  filter(hasNucleotideEntities == T) %>%
+  select(-hasNucleotideEntities)
+
