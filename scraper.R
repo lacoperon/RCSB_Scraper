@@ -131,7 +131,7 @@ DNA_path <- '//*[@id="MacromoleculeTableDNA"]/div/table/tbody/tr[3]'
 # Function to get the constituent Macromolecules in the structure
 # (In this case, I'll only use it for the RNA Parts, but it can also
 # be applied to Protein as well)
-getConstituentEntities <- function(url, path) {
+getConstituentEntities <- function(url, path, mode="Nucleo") {
   print(url)
   s <- GET(url)
   w <- content(s, as='text') # converts s to plaintext of HTML
@@ -142,27 +142,93 @@ getConstituentEntities <- function(url, path) {
   if (length(data_list) == 0) {
     return(NULL)
   }
-  EntityName <- data_list[seq(1, length(data_list), 4)]
-  entities <- data.frame(EntityName)
-  entities$ChainNames <- data_list[seq(2, length(data_list), 4)]
-  entities$Length <- data_list[seq(3, length(data_list), 4)]
-  entities$Organism <- data_list[seq(4, length(data_list), 4)]
+  if (mode == "Nucleo") {
+    EntityName <- data_list[seq(1, length(data_list), 4)]
+    entities <- data.frame(EntityName)
+    entities$ChainNames <- data_list[seq(2, length(data_list), 4)]
+    entities$Length <- data_list[seq(3, length(data_list), 4)]
+    entities$Organism <- data_list[seq(4, length(data_list), 4)]
+  }
+  
+  if (mode == "Protein") {
+    EntityName <- data_list[seq(1, length(data_list), 5)]
+    entities <- data.frame(EntityName)
+    entities$ChainNames <- data_list[seq(2, length(data_list), 5)]
+    entities$Length <- data_list[seq(3, length(data_list), 5)]
+    entities$Organism <- data_list[seq(4, length(data_list), 5)]
+    entities$Details <- data_list[seq(5, length(data_list), 5)]
+    entities$EntityName <- as.character(entities$EntityName)
+  }
+  
   return(entities)
 }
 
-# Path for DNA details
+# Path for RNA details
 getRNA <- partial(getConstituentEntities, path=DNA_path)
-cand_structs$NucleotideEntities <- sapply(cand_structs$PageLink, getRNA)
+NucleotideEntities <- sapply(cand_structs$PageLink, getRNA)
+
 
 # Some of the above don't actually contain Nucleotides with protein
 # (And, based on a cursory look at the dataset, don't contain Ribosome structs)
-cand_structs$hasNoEntities <- sapply(cand_structs$NucleotideEntities, is.null)
-cand_structs2 <- cand_structs2 %>% 
-  filter(hasNucleotideEntities != TRUE) %>% 
-  select(-hasNucleotideEntities)
+cand_structs$noNucleotideEntities <- sapply(NucleotideEntities, is.null)
+
+cand_structs2 <- cand_structs %>% 
+  filter() %>% 
+  select(-noNucleotideEntities)
 
 # Maybe we want to look at the structures that don't contain nucleotideEntities
-cand_structsFail <- cand_structs %>%
-  filter(hasNucleotideEntities == T) %>%
-  select(-hasNucleotideEntities)
+# Went through by hand -- they actually don't have nucleotide elements,
+# and often are irrelevant
+cand_structsFailNucleotideEntities <- cand_structs %>%
+  filter(noNucleotideEntities == T) %>%
+  select(-noNucleotideEntities)
+
+# Function that returns whether or not a particular structure has mRNA entity
+ismRNA <- function(nucleotideDF) {
+  containsmRNA <- grepl("[mM]RNA", nucleotideDF$EntityName)
+  return(sum(containsmRNA) + sum(containsMRNA) > 0)
+}
+
+# Vector of whether or not the structure contains mRNA
+cand_structs$hasMRNA <- sapply(NucleotideEntities, ismRNA)
+
+# cand_structs2 contains all structures which have mRNA
+cand_structs2 <- cand_structs %>% 
+  filter(hasMRNA == TRUE, noNucleotideEntities != TRUE) %>% 
+  select(-noNucleotideEntities, hasMRNA)
+
+# This contains all structures sthat don't contain mRNA. 
+# Went through by hand -- they actually don't have mRNA
+cand_structsNoMRNA <- cand_structs %>%
+  filter(hasMRNA == FALSE, noNucleotideEntities != TRUE) %>%
+  select(-noNucleotideEntities, hasMRNA)
+
+
+# Path for Protein details
+prot_path <- '//*[@id="MacromoleculeTable"]/div/table/tbody/tr[3]'
+getProtein <- partial(getConstituentEntities, path=prot_path, mode="Protein")
+ProteinEntities <- sapply(cand_structs$PageLink, getProtein)
+ProteinEntities_transp <- t(ProteinEntities)
+
+prot_seq <- seq(1, dim(ProteinEntities_transp)[1])
+containsS12 <- function(index) {
+  temp <- ProteinEntities_transp[index,]
+  contS12 <- (sum(grepl("[sS]12", temp$EntityName)) > 0)
+  return(contS12)
+}
+cand_structs$containsS12 <- sapply(prot_seq, containsS12)
+
+# cand_structs2 contains all structures which have mRNA, and S12
+cand_structs2 <- cand_structs %>% 
+  filter(hasMRNA == TRUE, 
+         noNucleotideEntities != TRUE,
+         containsS12 == TRUE) %>% 
+  select(-noNucleotideEntities)
+
+cand_structsNoS12 <- cand_structs %>% 
+  filter(containsS12 != TRUE) %>% 
+  select(-containsS12)
+
+# Now, to try to isolate the mRNA information
+# Length of, Sequence of, Chain Of
 
