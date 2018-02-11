@@ -3,6 +3,7 @@ library(readr)
 library(httr)
 library(dplyr)
 library(purrr)
+library(stringr)
 
 # Opens pre-saved version of the search results
 searchResults <- read_file("data/searchResults.html")
@@ -124,7 +125,7 @@ res_parsed <- gsub("Å", "", res_parsed)
 res_parsed <- as.numeric(res_parsed)
 cand_structs$Resolution <- res_parsed
 
-write_csv(cand_structs, "./data/candStructs.csv")
+# write_csv(cand_structs, "./data/candStructs.csv")
 
 # Path associated with 
 DNA_path <- '//*[@id="MacromoleculeTableDNA"]/div/table/tbody/tr[3]'
@@ -167,6 +168,9 @@ getConstituentEntities <- function(url, path, mode="Nucleo") {
 getRNA <- partial(getConstituentEntities, path=DNA_path)
 NucleotideEntities <- sapply(cand_structs$PageLink, getRNA)
 
+# Pointer to original index
+cand_structs$OriginalIndex <- seq(1, dim(cand_structs)[1])
+
 
 # Some of the above don't actually contain Nucleotides with protein
 # (And, based on a cursory look at the dataset, don't contain Ribosome structs)
@@ -186,7 +190,7 @@ cand_structsFailNucleotideEntities <- cand_structs %>%
 # Function that returns whether or not a particular structure has mRNA entity
 ismRNA <- function(nucleotideDF) {
   containsmRNA <- grepl("[mM]RNA", nucleotideDF$EntityName)
-  return(sum(containsmRNA) + sum(containsMRNA) > 0)
+  return(sum(containsmRNA) > 0)
 }
 
 # Vector of whether or not the structure contains mRNA
@@ -223,12 +227,82 @@ cand_structs2 <- cand_structs %>%
   filter(hasMRNA == TRUE, 
          noNucleotideEntities != TRUE,
          containsS12 == TRUE) %>% 
-  select(-noNucleotideEntities)
+  select(-noNucleotideEntities, -containsS12, -hasMRNA)
 
+# These don't seem to be structures we're interested in, either
 cand_structsNoS12 <- cand_structs %>% 
   filter(containsS12 != TRUE) %>% 
   select(-containsS12)
 
 # Now, to try to isolate the mRNA information
-# Length of, Sequence of, Chain Of
+
+# This function returns the chain names associated with the mRNA in its
+# FASTA file
+get_mRNA_Chains <- function(index, filtered_ne, urls) {
+  
+  url <- urls[index]
+  NucleoEntity <- data.frame(filtered_ne[index])
+  print(url)
+  s <- GET(url)
+  w <- content(s, as='text') # converts FASTA response to plaintext
+  fasta_list <- strsplit(w, ">")[[1]]
+  df_fasta <- data.frame(fasta_list)
+  df_fasta <- filter(df_fasta, fasta_list != "")
+  df_fasta$chainName <- sub(".{4}:", "", df_fasta$fasta_list, perl=T)
+  df_fasta$chainName <- trimws(sub("\\|.*+([[:space:]].*)*", 
+                                   "", 
+                                   df_fasta$chainName, perl=T))
+  df_fasta$sequence  <- sub("(.*SEQUENCE)[[:space:]]", "", df_fasta$fasta_list)
+  
+  
+  colnames(NucleoEntity) <- c("EntityName","ChainNames", "Length", "Organism")
+  NucleoEntity$ismRNA <- sapply(NucleoEntity$EntityName, partial(grepl, pattern="[mM]RNA"))
+  mRNAChainNames <- filter(NucleoEntity, ismRNA)$ChainNames
+  return(mRNAChainNames)
+}
+
+indices <- seq(1, dim(cand_structs2)[1])
+filtered_ne <- NucleotideEntities[cand_structs2$OriginalIndex]
+cand_structs2$mRNA_ChainNames <- sapply(indices, partial(get_mRNA_Chains, 
+                                          urls=cand_structs2$FastaLink,
+                                          filtered_ne = filtered_ne))
+
+
+# Gets number of mRNA chains
+cand_structs2 <- cand_structs2 %>%
+  mutate(num_mRNA_Chains=str_count(mRNA_ChainNames, ",") + 1)
+
+# Gets max number of chains
+max(cand_structs2$numChains)
+# Gets min number of chains (should be 1)
+min(cand_structs2$numChains)
+
+get_mRNA_Seqs <- function(index, filtered_nu=filtered_ne, urls=cand_structs2$FastaLink) {
+  url <- urls[index]
+  NucleoEntity <- data.frame(filtered_nu[index])
+  s <- GET(url)
+  print(url)
+  w <- content(s, as='text') # converts FASTA response to plaintext
+  fasta_list <- strsplit(w, ">")[[1]]
+  df_fasta <- data.frame(fasta_list)
+  df_fasta <- filter(df_fasta, fasta_list != "")
+  df_fasta$chainName <- sub(".{4}:", "", df_fasta$fasta_list, perl=T)
+  df_fasta$chainName <- trimws(sub("\\|.*+([[:space:]].*)*", 
+                                   "", 
+                                   df_fasta$chainName, perl=T))
+  df_fasta$sequence  <- sub("(.*SEQUENCE)[[:space:]]", "", df_fasta$fasta_list)
+  
+  colnames(NucleoEntity) <- c("EntityName","ChainNames", "Length", "Organism")
+  NucleoEntity$ismRNA <- sapply(NucleoEntity$EntityName, partial(grepl, pattern="[mM]RNA"))
+  mRNAChainNames <- filter(NucleoEntity, ismRNA)$ChainNames
+  chainNames <- strsplit(mRNAChainNames, ",")[[1]]
+  mrna_fasta <- filter(df_fasta, chainName %in% chainNames)
+  mrna_fasta$sequence <- trimws(mrna_fasta$sequence)
+  return(mrna_fasta$sequence)
+}
+
+cand_structs2$mRNA_Sequences <- sapply(indices, get_mRNA_Seqs)
+cand_structs2$mRNA_Length <- sapply(cand_structs2$mRNA_Sequences, 
+                                    function(seqs) (sum(nchar(seqs[[1]]))))
+
 
