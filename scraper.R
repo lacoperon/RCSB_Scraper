@@ -125,8 +125,6 @@ res_parsed <- gsub("Å", "", res_parsed)
 res_parsed <- as.numeric(res_parsed)
 cand_structs$Resolution <- res_parsed
 
-# write_csv(cand_structs, "./data/candStructs.csv")
-
 # Path associated with 
 DNA_path <- '//*[@id="MacromoleculeTableDNA"]/div/table/tbody/tr[3]'
 # Function to get the constituent Macromolecules in the structure
@@ -177,7 +175,7 @@ cand_structs$OriginalIndex <- seq(1, dim(cand_structs)[1])
 cand_structs$noNucleotideEntities <- sapply(NucleotideEntities, is.null)
 
 cand_structs2 <- cand_structs %>% 
-  filter() %>% 
+  filter(noNucleotideEntities != T) %>% 
   select(-noNucleotideEntities)
 
 # Maybe we want to look at the structures that don't contain nucleotideEntities
@@ -304,5 +302,20 @@ get_mRNA_Seqs <- function(index, filtered_nu=filtered_ne, urls=cand_structs2$Fas
 cand_structs2$mRNA_Sequences <- sapply(indices, get_mRNA_Seqs)
 cand_structs2$mRNA_Length <- sapply(cand_structs2$mRNA_Sequences, 
                                     function(seqs) (sum(nchar(seqs[[1]]))))
+
+# Writing out logic
+write_csv(cand_structs,  path="./data/candStructs.csv")
+cand_structs2w <- cand_structs2
+
+flattenSeqList <- function(listOfSequences) {
+  flattened <- paste(listOfSequences, collapse=", ")
+  return(unlist(flattened))
+}
+
+cand_structs2w$mRNA_Sequences <- sapply(cand_structs2w$mRNA_Sequences, flattenSeqList)
+cand_structs2w$mRNA_ChainNames <- sapply(cand_structs2w$mRNA_ChainNames, function(elt) return(elt[[1]]))
+write_csv(cand_structs2w,  path="./data/candStructs_filtered.csv")
+
+
 
 
