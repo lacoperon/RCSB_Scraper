@@ -254,7 +254,8 @@ get_mRNA_Chains <- function(index, filtered_ne, urls) {
   
   
   colnames(NucleoEntity) <- c("EntityName","ChainNames", "Length", "Organism")
-  NucleoEntity$ismRNA <- sapply(NucleoEntity$EntityName, partial(grepl, pattern="[mM]RNA"))
+  NucleoEntity$ismRNA <- sapply(NucleoEntity$EntityName, 
+                                partial(grepl, pattern="[mM]RNA"))
   mRNAChainNames <- filter(NucleoEntity, ismRNA)$ChainNames
   return(mRNAChainNames)
 }
@@ -264,6 +265,8 @@ filtered_ne <- NucleotideEntities[cand_structs2$OriginalIndex]
 cand_structs2$mRNA_ChainNames <- sapply(indices, partial(get_mRNA_Chains, 
                                           urls=cand_structs2$FastaLink,
                                           filtered_ne = filtered_ne))
+cand_structs2$mRNA_ChainNames <- sapply(cand_structsw$mRNA_ChainNames, 
+                                        function(elt) return(elt[[1]]))
 
 
 # Gets number of mRNA chains
@@ -306,11 +309,6 @@ cand_structs2$mRNA_Length <- sapply(cand_structs2$mRNA_Sequences,
 # Writing out logic
 write_csv(cand_structs,  path="./data/candStructs.csv")
 cand_structs2w <- cand_structs2
-
-flattenSeqList <- function(listOfSequences) {
-  flattened <- paste(listOfSequences, collapse=", ")
-  return(unlist(flattened))
-}
 
 cand_structs2w$mRNA_Sequences <- sapply(cand_structs2w$mRNA_Sequences, flattenSeqList)
 cand_structs2w$mRNA_ChainNames <- sapply(cand_structs2w$mRNA_ChainNames, function(elt) return(elt[[1]]))
