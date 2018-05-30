@@ -4,6 +4,9 @@ library(httr)
 library(dplyr)
 library(purrr)
 library(stringr)
+# library(devtools)
+# install_github("lacoperon/MDScraperTools")
+# library(MDScraperTools)
 
 # Opens pre-saved version of the search results
 searchResults <- read_file("data/searchResults.html")
@@ -43,7 +46,8 @@ cand_structs$PaperDate  <- sapply(cit_nodes, xmlValue)
 link_path <- "//ul[@id='SearchResultsDetails-MainContent']/li/div[2]/h3/a"
 cand_structs$PageLink <- xpathSApply(doc=d, path=link_path, fun=xmlGetAttr, name="href")
 
-getLinkFromPage <- function(url, path, prepend) {
+
+getLinkFromPage <- function(url, path, prepend="http://www.rcsb.org") {
   # Gets HTML associated with particular site
   print(url)
   s <- GET(url)
@@ -213,12 +217,37 @@ ProteinEntities <- sapply(cand_structs$PageLink, getProtein)
 ProteinEntities_transp <- t(ProteinEntities)
 
 prot_seq <- seq(1, dim(ProteinEntities_transp)[1])
+
+
 containsS12 <- function(index) {
   temp <- ProteinEntities_transp[index,]
-  contS12 <- (sum(grepl("[sS]12", temp$EntityName)) > 0)
-  return(contS12)
+  return(sum(grepl("[sS]12", temp$EntityName)) > 0)
 }
+
+
+# This function takes in the index of a row in the RCSB Structure Scraper,
+# alongside a protein chain name regex of interest, and returns the chain name
+# as it is defined in the PDB chain key on the RCSB website. 
+# 
+# In doing so, this lets us translate between different namings of chains
+#
+# Input:
+#    index      -- index of the row of interest in the original cand_structs df
+#    chainRegex -- Regex corresponding to the protein of interest (default: S12)
+# Output:
+#    the chain name(s) of S12 in the PDB file
+getChainName <- function(index, chainRegex="[sS]12") {
+  temp <- ProteinEntities_transp[index,]
+  contS12 <- which(grepl(chainRegex, temp$EntityName))
+  if(length(contS12) == 0) {
+    return(NA)
+  }
+  thing <- (data.frame(temp))
+  return(toString(thing[contS12,][1,]$ChainNames[1]))
+}
+
 cand_structs$containsS12 <- sapply(prot_seq, containsS12)
+cand_structs$ChainS12    <- unlist(sapply(prot_seq, getChainName))
 
 # cand_structs2 contains all structures which have mRNA, and S12
 cand_structs2 <- cand_structs %>% 
@@ -260,12 +289,38 @@ get_mRNA_Chains <- function(index, filtered_ne, urls) {
   return(mRNAChainNames)
 }
 
+# This function returns the chain names associated with the S12 protein in its
+# FASTA file
+get_mRNA_Chains <- function(index, filtered_ne, urls) {
+  
+  url <- urls[index]
+  NucleoEntity <- data.frame(filtered_ne[index])
+  print(url)
+  s <- GET(url)
+  w <- content(s, as='text') # converts FASTA response to plaintext
+  fasta_list <- strsplit(w, ">")[[1]]
+  df_fasta <- data.frame(fasta_list)
+  df_fasta <- filter(df_fasta, fasta_list != "")
+  df_fasta$chainName <- sub(".{4}:", "", df_fasta$fasta_list, perl=T)
+  df_fasta$chainName <- trimws(sub("\\|.*+([[:space:]].*)*", 
+                                   "", 
+                                   df_fasta$chainName, perl=T))
+  df_fasta$sequence  <- sub("(.*SEQUENCE)[[:space:]]", "", df_fasta$fasta_list)
+  
+  
+  colnames(NucleoEntity) <- c("EntityName","ChainNames", "Length", "Organism")
+  NucleoEntity$ismRNA <- sapply(NucleoEntity$EntityName, 
+                                partial(grepl, pattern="[mM]RNA"))
+  mRNAChainNames <- filter(NucleoEntity, ismRNA)$ChainNames
+  return(mRNAChainNames)
+}
+
 indices <- seq(1, dim(cand_structs2)[1])
 filtered_ne <- NucleotideEntities[cand_structs2$OriginalIndex]
 cand_structs2$mRNA_ChainNames <- sapply(indices, partial(get_mRNA_Chains, 
                                           urls=cand_structs2$FastaLink,
                                           filtered_ne = filtered_ne))
-cand_structs2$mRNA_ChainNames <- sapply(cand_structsw$mRNA_ChainNames, 
+cand_structs2$mRNA_ChainNames <- sapply(cand_structs2$mRNA_ChainNames, 
                                         function(elt) return(elt[[1]]))
 
 
@@ -303,6 +358,8 @@ get_mRNA_Seqs <- function(index, filtered_nu=filtered_ne, urls=cand_structs2$Fas
 }
 
 cand_structs2$mRNA_Sequences <- sapply(indices, get_mRNA_Seqs)
+cand_structs2$mRNA_Sequences <- sapply(cand_structs2$mRNA_Sequences, 
+                                       partial(gsub, pattern="\n"))
 cand_structs2$mRNA_Length <- sapply(cand_structs2$mRNA_Sequences, 
                                     function(seqs) (sum(nchar(seqs[[1]]))))
 
@@ -312,8 +369,33 @@ cand_structs2w <- cand_structs2
 
 cand_structs2w$mRNA_Sequences <- sapply(cand_structs2w$mRNA_Sequences, flattenSeqList)
 cand_structs2w$mRNA_ChainNames <- sapply(cand_structs2w$mRNA_ChainNames, function(elt) return(elt[[1]]))
-write_csv(cand_structs2w,  path="./data/candStructs_filtered.csv")
+# write_csv(cand_structs2w,  path="./data/candStructs_filtered.csv")
 
 
+# -- New Stuff --
+cand_structs2 <- cand_structs2 %>%
+  mutate(containsAUGNum =sapply(mRNA_Sequences, 
+                                  partial(grepl, pattern="AUG")))
 
+cand_structs2$containsAUGNum <- sapply(cand_structs2$containsAUGNum,
+                                        sum)
+cand_structs2$containsAUG <- sapply(cand_structs2$containsAUGList, function(val) val > 0)
+
+cand_structs_AUG <-cand_structs2 %>% 
+  filter(containsAUG) %>%
+  select(-containsAUG)
+
+cand_structs_AUG$mRNA_Sequences <- sapply(cand_structs_AUG$mRNA_Sequences, flattenSeqList)
+cand_structs_AUG$mRNA_ChainNames <- sapply(cand_structs_AUG$mRNA_ChainNames, function(elt) return(elt[[1]]))
+write_csv(cand_structs_AUG,  path="./data/candStructs_filtered_onlyAUG.csv")
+
+getChain <- function(chainNames, mRNAs) {
+  chainVec <- strsplit(chainNames[[1]], split=",")
+  mRNAs <- sapply(mRNAs[[1]], partial(gsub, pattern="\n",x=""))
+  containsAUG <- sapply(mRNAs, partial(grepl, pattern="AUG"))
+  return(containsAUG)
+}
+
+index <- 1
+getChain(cand_structs_AUG$mRNA_ChainNames[index], cand_structs_AUG$mRNA_Sequences[index])
 
