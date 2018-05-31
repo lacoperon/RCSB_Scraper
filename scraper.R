@@ -210,12 +210,15 @@ cand_structsNoMRNA <- cand_structs %>%
   select(-noNucleotideEntities, hasMRNA)
 
 
-# Path for Protein details
+# This obtains the protein entity information for each protein structure
+# (info like Chain Name, Chain Code, Length, Organism)
 prot_path <- '//*[@id="MacromoleculeTable"]/div/table/tbody/tr[3]'
 getProtein <- partial(getConstituentEntities, path=prot_path, mode="Protein")
 ProteinEntities <- sapply(cand_structs$PageLink, getProtein)
 ProteinEntities_transp <- t(ProteinEntities)
 
+# Assigns an index to each protein structure in the ProteinEntities_transp
+# matrix, which serves as a unique ID for later reference in filtered dfs
 prot_seq <- seq(1, dim(ProteinEntities_transp)[1])
 
 
@@ -223,7 +226,6 @@ containsS12 <- function(index) {
   temp <- ProteinEntities_transp[index,]
   return(sum(grepl("[sS]12", temp$EntityName)) > 0)
 }
-
 
 # This function takes in the index of a row in the RCSB Structure Scraper,
 # alongside a protein chain name regex of interest, and returns the chain name
@@ -261,6 +263,8 @@ cand_structsNoS12 <- cand_structs %>%
   filter(containsS12 != TRUE) %>% 
   select(-containsS12)
 
+# -- FROM HERE ON IN NEEDS REFACTORING (also should refactor this into package)
+
 # Now, to try to isolate the mRNA information
 
 # This function returns the chain names associated with the mRNA in its
@@ -284,13 +288,13 @@ get_mRNA_Chains <- function(index, filtered_ne, urls) {
   
   colnames(NucleoEntity) <- c("EntityName","ChainNames", "Length", "Organism")
   NucleoEntity$ismRNA <- sapply(NucleoEntity$EntityName, 
+                                entityname="ismRNA",
                                 partial(grepl, pattern="[mM]RNA"))
   mRNAChainNames <- filter(NucleoEntity, ismRNA)$ChainNames
   return(mRNAChainNames)
 }
 
-# This function returns the chain names associated with the S12 protein in its
-# FASTA file
+# This function returns the chain names associated with a given protein in the FASTA
 get_mRNA_Chains <- function(index, filtered_ne, urls) {
   
   url <- urls[index]
@@ -329,11 +333,14 @@ cand_structs2 <- cand_structs2 %>%
   mutate(num_mRNA_Chains=str_count(mRNA_ChainNames, ",") + 1)
 
 # Gets max number of chains
-max(cand_structs2$numChains)
+max(cand_structs2$num_mRNA_Chains)
 # Gets min number of chains (should be 1)
-min(cand_structs2$numChains)
+min(cand_structs2$num_mRNA_Chains)
 
-get_mRNA_Seqs <- function(index, filtered_nu=filtered_ne, urls=cand_structs2$FastaLink) {
+# This function obtains the FASTA sequence of the mRNA
+# TODO: Generalize for all sequences (ie S12, rRNA)
+get_mRNA_Seqs <- function(index, filtered_nu=filtered_ne, 
+                          urls=cand_structs2$FastaLink, pattern="[mM]RNA") {
   url <- urls[index]
   NucleoEntity <- data.frame(filtered_nu[index])
   s <- GET(url)
@@ -349,53 +356,58 @@ get_mRNA_Seqs <- function(index, filtered_nu=filtered_ne, urls=cand_structs2$Fas
   df_fasta$sequence  <- sub("(.*SEQUENCE)[[:space:]]", "", df_fasta$fasta_list)
   
   colnames(NucleoEntity) <- c("EntityName","ChainNames", "Length", "Organism")
-  NucleoEntity$ismRNA <- sapply(NucleoEntity$EntityName, partial(grepl, pattern="[mM]RNA"))
+  NucleoEntity$ismRNA <- sapply(NucleoEntity$EntityName, partial(grepl, pattern=pattern))
   mRNAChainNames <- filter(NucleoEntity, ismRNA)$ChainNames
   chainNames <- strsplit(mRNAChainNames, ",")[[1]]
   mrna_fasta <- filter(df_fasta, chainName %in% chainNames)
   mrna_fasta$sequence <- trimws(mrna_fasta$sequence)
-  return(mrna_fasta$sequence)
+  return(mrna_fasta$sequence[1])
 }
 
+# Obtains mRNA sequences, length
 cand_structs2$mRNA_Sequences <- sapply(indices, get_mRNA_Seqs)
-cand_structs2$mRNA_Sequences <- sapply(cand_structs2$mRNA_Sequences, 
-                                       partial(gsub, pattern="\n"))
-cand_structs2$mRNA_Length <- sapply(cand_structs2$mRNA_Sequences, 
+cand_structs2$mRNA_Length    <- sapply(cand_structs2$mRNA_Sequences, 
                                     function(seqs) (sum(nchar(seqs[[1]]))))
 
-# Writing out logic
-write_csv(cand_structs,  path="./data/candStructs.csv")
-cand_structs2w <- cand_structs2
-
-cand_structs2w$mRNA_Sequences <- sapply(cand_structs2w$mRNA_Sequences, flattenSeqList)
-cand_structs2w$mRNA_ChainNames <- sapply(cand_structs2w$mRNA_ChainNames, function(elt) return(elt[[1]]))
-# write_csv(cand_structs2w,  path="./data/candStructs_filtered.csv")
+# 
 
 
-# -- New Stuff --
-cand_structs2 <- cand_structs2 %>%
-  mutate(containsAUGNum =sapply(mRNA_Sequences, 
-                                  partial(grepl, pattern="AUG")))
 
-cand_structs2$containsAUGNum <- sapply(cand_structs2$containsAUGNum,
-                                        sum)
-cand_structs2$containsAUG <- sapply(cand_structs2$containsAUGList, function(val) val > 0)
 
-cand_structs_AUG <-cand_structs2 %>% 
-  filter(containsAUG) %>%
-  select(-containsAUG)
 
-cand_structs_AUG$mRNA_Sequences <- sapply(cand_structs_AUG$mRNA_Sequences, flattenSeqList)
-cand_structs_AUG$mRNA_ChainNames <- sapply(cand_structs_AUG$mRNA_ChainNames, function(elt) return(elt[[1]]))
-write_csv(cand_structs_AUG,  path="./data/candStructs_filtered_onlyAUG.csv")
-
-getChain <- function(chainNames, mRNAs) {
-  chainVec <- strsplit(chainNames[[1]], split=",")
-  mRNAs <- sapply(mRNAs[[1]], partial(gsub, pattern="\n",x=""))
-  containsAUG <- sapply(mRNAs, partial(grepl, pattern="AUG"))
-  return(containsAUG)
-}
-
-index <- 1
-getChain(cand_structs_AUG$mRNA_ChainNames[index], cand_structs_AUG$mRNA_Sequences[index])
+# # Writing out logic
+# write_csv(cand_structs,  path="./data/candStructs.csv")
+# cand_structs2w <- cand_structs2
+# 
+# cand_structs2w$mRNA_Sequences <- sapply(cand_structs2w$mRNA_Sequences, flattenSeqList)
+# cand_structs2w$mRNA_ChainNames <- sapply(cand_structs2w$mRNA_ChainNames, function(elt) return(elt[[1]]))
+# # write_csv(cand_structs2w,  path="./data/candStructs_filtered.csv")
+# 
+# 
+# # -- New Stuff --
+# cand_structs2 <- cand_structs2 %>%
+#   mutate(containsAUGNum =sapply(mRNA_Sequences, 
+#                                   partial(grepl, pattern="AUG")))
+# 
+# cand_structs2$containsAUGNum <- sapply(cand_structs2$containsAUGNum,
+#                                         sum)
+# cand_structs2$containsAUG <- sapply(cand_structs2$containsAUGList, function(val) val > 0)
+# 
+# cand_structs_AUG <-cand_structs2 %>% 
+#   filter(containsAUG) %>%
+#   select(-containsAUG)
+# 
+# cand_structs_AUG$mRNA_Sequences <- sapply(cand_structs_AUG$mRNA_Sequences, flattenSeqList)
+# cand_structs_AUG$mRNA_ChainNames <- sapply(cand_structs_AUG$mRNA_ChainNames, function(elt) return(elt[[1]]))
+# write_csv(cand_structs_AUG,  path="./data/candStructs_filtered_onlyAUG.csv")
+# 
+# getChain <- function(chainNames, mRNAs) {
+#   chainVec <- strsplit(chainNames[[1]], split=",")
+#   mRNAs <- sapply(mRNAs[[1]], partial(gsub, pattern="\n",x=""))
+#   containsAUG <- sapply(mRNAs, partial(grepl, pattern="AUG"))
+#   return(containsAUG)
+# }
+# 
+# index <- 1
+# getChain(cand_structs_AUG$mRNA_ChainNames[index], cand_structs_AUG$mRNA_Sequences[index])
 
